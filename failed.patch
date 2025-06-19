@@ -1,0 +1,74 @@
+---
+ clang/include/clang/Interpreter/Interpreter.h |  2 +-
+ clang/lib/Interpreter/Interpreter.cpp         | 13 ++++++++++---
+ clang/tools/clang-repl/ClangRepl.cpp          |  4 +++-
+ 3 files changed, 14 insertions(+), 5 deletions(-)
+
+diff --git a/clang/include/clang/Interpreter/Interpreter.h b/clang/include/clang/Interpreter/Interpreter.h
+index 42486304083f4..f7083742a672e 100644
+--- a/clang/include/clang/Interpreter/Interpreter.h
++++ b/clang/include/clang/Interpreter/Interpreter.h
+@@ -152,7 +152,7 @@ class Interpreter {
+   llvm::Error Undo(unsigned N = 1);
+ 
+   /// Link a dynamic library
+-  llvm::Error LoadDynamicLibrary(const char *name);
++  llvm::Error LoadDynamicLibrary(const char *name, bool UseEPC = false);
+ 
+   /// \returns the \c ExecutorAddr of a \c GlobalDecl. This interface uses
+   /// the CodeGenModule's internal mangling cache to avoid recomputing the
+diff --git a/clang/lib/Interpreter/Interpreter.cpp b/clang/lib/Interpreter/Interpreter.cpp
+index c281c917cff4b..faa1727d12731 100644
+--- a/clang/lib/Interpreter/Interpreter.cpp
++++ b/clang/lib/Interpreter/Interpreter.cpp
+@@ -718,13 +718,20 @@ llvm::Error Interpreter::Undo(unsigned N) {
+   return llvm::Error::success();
+ }
+ 
+-llvm::Error Interpreter::LoadDynamicLibrary(const char *name) {
++llvm::Error Interpreter::LoadDynamicLibrary(const char *name, bool UseEPC) {
+   auto EE = getExecutionEngine();
+   if (!EE)
+     return EE.takeError();
+ 
+-  if (auto DLSG = llvm::orc::EPCDynamicLibrarySearchGenerator::Load(
+-          EE->getExecutionSession(), name))
++  auto &DL = EE->getDataLayout();
++  if (UseEPC) {
++    if (auto DLSG = llvm::orc::EPCDynamicLibrarySearchGenerator::Load(
++            EE->getExecutionSession(), name))
++      EE->getMainJITDylib().addGenerator(std::move(*DLSG));
++    else
++      return DLSG.takeError();
++  } else if (auto DLSG = llvm::orc::DynamicLibrarySearchGenerator::Load(
++                 name, DL.getGlobalPrefix()))
+     EE->getMainJITDylib().addGenerator(std::move(*DLSG));
+   else
+     return DLSG.takeError();
+diff --git a/clang/tools/clang-repl/ClangRepl.cpp b/clang/tools/clang-repl/ClangRepl.cpp
+index 7fcd5f1730141..13414da734127 100644
+--- a/clang/tools/clang-repl/ClangRepl.cpp
+ 
+-llvm::Error Interpreter::LoadDynamicLibrary(const char *name) {
++llvm::Error Interpreter::LoadDynamicLibrary(const char *name, bool UseEPC) {
+   auto EE = getExecutionEngine();
+   if (!EE)
+     return EE.takeError();
+ 
+-  if (auto DLSG = llvm::orc::EPCDynamicLibrarySearchGenerator::Load(
+-          EE->getExecutionSession(), name))
++  auto &DL = EE->getDataLayout();
++  if (UseEPC) {
++    if (auto DLSG = llvm::orc::EPCDynamicLibrarySearchGenerator::Load(
++            EE->getExecutionSession(), name))
++      EE->getMainJITDylib().addGenerator(std::move(*DLSG));
++    else
++      return DLSG.takeError();
++  } else if (auto DLSG = llvm::orc::DynamicLibrarySearchGenerator::Load(
++                 name, DL.getGlobalPrefix()))
+     EE->getMainJITDylib().addGenerator(std::move(*DLSG));
+   else
+     return DLSG.takeError();
+diff --git a/clang/tools/clang-repl/ClangRepl.cpp b/clang/tools/clang-repl/ClangRepl.cpp
+index 7fcd5f1730141..13414da734127 100644
+--- a/clang/tools/clang-repl/ClangRepl.cpp
