@@ -33,8 +33,6 @@
 
 #include "llvm/ExecutionEngine/Orc/Debugging/DebuggerSupport.h"
 
-#include <iostream>
-
 // Disable LSan for this test.
 // FIXME: Re-enable once we can assume GCC 13.2 or higher.
 // https://llvm.org/github.com/llvm/llvm-project/issues/67586.
