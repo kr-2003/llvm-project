@@ -35,4 +35,9 @@ llvm::Expected<std::unique_ptr<llvm::orc::SimpleRemoteEPC>>
 connectTCPSocket(llvm::StringRef NetworkAddress, bool UseSharedMemory,
                  llvm::StringRef SlabAllocateSizeString);
 
+
+/// Get the PID of the last launched executor.
+/// This is useful for debugging or for cleanup purposes.
+pid_t getLastLaunchedExecutorPID();
+
 #endif // LLVM_CLANG_INTERPRETER_REMOTEJITUTILS_H

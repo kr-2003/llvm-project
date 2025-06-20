@@ -34,6 +34,8 @@
 using namespace llvm;
 using namespace llvm::orc;
 
+static std::atomic<pid_t> LaunchedExecutorPID{-1};
+
 Expected<uint64_t> getSlabAllocSize(StringRef SizeString) {
   SizeString = SizeString.trim();
 
@@ -170,8 +172,9 @@ launchExecutor(StringRef ExecutablePath, bool UseSharedMemory,
              << ExecutorPath.get() << "\"\n";
       exit(1);
     }
+  } else {
+     LaunchedExecutorPID = ChildPID;
   }
-  // else we're the parent...
 
   // Close child ends of RPC pipes
   close(ToExecutor[ReadEnd]);
@@ -190,10 +193,6 @@ launchExecutor(StringRef ExecutablePath, bool UseSharedMemory,
   auto EPC = SimpleRemoteEPC::Create<FDSimpleRemoteEPCTransport>(
       std::make_unique<DynamicThreadPoolTaskDispatcher>(std::nullopt),
       std::move(S), FromExecutor[ReadEnd], ToExecutor[WriteEnd]);
-
-  // Read from stdout and stderr pipes
-  char buffer[1024];
-  ssize_t bytesRead;
 
   // Read stdout
   std::thread([readFd = StdoutPipe[ReadEnd]] {
@@ -222,91 +221,6 @@ launchExecutor(StringRef ExecutablePath, bool UseSharedMemory,
   return EPC;
 #endif
 }
-
-// Expected<std::unique_ptr<SimpleRemoteEPC>>
-// launchExecutor(StringRef ExecutablePath, bool UseSharedMemory,
-//                llvm::StringRef SlabAllocateSizeString) {
-// #ifndef LLVM_ON_UNIX
-//   // FIXME: Add support for Windows.
-//   return make_error<StringError>("-" + ExecutablePath +
-//                                      " not supported on non-unix platforms",
-//                                  inconvertibleErrorCode());
-// #elif !LLVM_ENABLE_THREADS
-//   // Out of process mode using SimpleRemoteEPC depends on threads.
-//   return make_error<StringError>(
-//       "-" + ExecutablePath +
-//           " requires threads, but LLVM was built with "
-//           "LLVM_ENABLE_THREADS=Off",
-//       inconvertibleErrorCode());
-// #else
-
-//   if (!sys::fs::can_execute(ExecutablePath))
-//     return make_error<StringError>(
-//         formatv("Specified executor invalid: {0}", ExecutablePath),
-//         inconvertibleErrorCode());
-
-//   constexpr int ReadEnd = 0;
-//   constexpr int WriteEnd = 1;
-
-//   // Pipe FDs.
-//   int ToExecutor[2];
-//   int FromExecutor[2];
-
-//   pid_t ChildPID;
-
-//   // Create pipes to/from the executor..
-//   if (pipe(ToExecutor) != 0 || pipe(FromExecutor) != 0)
-//     return make_error<StringError>("Unable to create pipe for executor",
-//                                    inconvertibleErrorCode());
-
-//   ChildPID = fork();
-
-//   if (ChildPID == 0) {
-//     // In the child...
-
-//     // Close the parent ends of the pipes
-//     close(ToExecutor[WriteEnd]);
-//     close(FromExecutor[ReadEnd]);
-
-//     // Execute the child process.
-//     std::unique_ptr<char[]> ExecutorPath, FDSpecifier;
-//     {
-//       ExecutorPath = std::make_unique<char[]>(ExecutablePath.size() + 1);
-//       strcpy(ExecutorPath.get(), ExecutablePath.data());
-
-//       std::string FDSpecifierStr("filedescs=");
-//       FDSpecifierStr += utostr(ToExecutor[ReadEnd]);
-//       FDSpecifierStr += ',';
-//       FDSpecifierStr += utostr(FromExecutor[WriteEnd]);
-//       FDSpecifier = std::make_unique<char[]>(FDSpecifierStr.size() + 1);
-//       strcpy(FDSpecifier.get(), FDSpecifierStr.c_str());
-//     }
-
-//     char *const Args[] = {ExecutorPath.get(), FDSpecifier.get(), nullptr};
-//     int RC = execvp(ExecutorPath.get(), Args);
-//     if (RC != 0) {
-//       errs() << "unable to launch out-of-process executor \""
-//              << ExecutorPath.get() << "\"\n";
-//       exit(1);
-//     }
-//   }
-//   // else we're the parent...
-
-//   // Close the child ends of the pipes
-//   close(ToExecutor[ReadEnd]);
-//   close(FromExecutor[WriteEnd]);
-
-//   auto S = SimpleRemoteEPC::Setup();
-//   if (UseSharedMemory)
-//     S.CreateMemoryManager = [SlabAllocateSizeString](SimpleRemoteEPC &EPC) {
-//       return createSharedMemoryManager(EPC, SlabAllocateSizeString);
-//     };
-
-//   return SimpleRemoteEPC::Create<FDSimpleRemoteEPCTransport>(
-//       std::make_unique<DynamicThreadPoolTaskDispatcher>(std::nullopt),
-//       std::move(S), FromExecutor[ReadEnd], ToExecutor[WriteEnd]);
-// #endif
-// }
 
 #if LLVM_ON_UNIX && LLVM_ENABLE_THREADS
 
@@ -398,4 +312,8 @@ connectTCPSocket(StringRef NetworkAddress, bool UseSharedMemory,
       std::make_unique<DynamicThreadPoolTaskDispatcher>(std::nullopt),
       std::move(S), *SockFD, *SockFD);
 #endif
+}
+
+pid_t getLastLaunchedExecutorPID() {
+  return LaunchedExecutorPID;
 }
