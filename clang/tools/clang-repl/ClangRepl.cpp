@@ -30,6 +30,9 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/Host.h"
 #include <optional>
+#include <iostream>
+#include <unistd.h>
+#include <fcntl.h>
 
 #include "llvm/ExecutionEngine/Orc/Debugging/DebuggerSupport.h"
 
@@ -237,6 +240,39 @@ ReplListCompleter::operator()(llvm::StringRef Buffer, size_t Pos,
 }
 
 llvm::ExitOnError ExitOnErr;
+
+static int g_child_stdout_fd = -1;
+static int g_child_stderr_fd = -1;
+
+void drainChildOutput() {
+    char buffer[4096];
+    ssize_t bytes_read;
+    
+    // Drain stdout pipe
+    if (g_child_stdout_fd != -1) {
+        // Make non-blocking to avoid hanging if no data
+        int flags = fcntl(g_child_stdout_fd, F_GETFL, 0);
+        fcntl(g_child_stdout_fd, F_SETFL, flags | O_NONBLOCK);
+        
+        while ((bytes_read = read(g_child_stdout_fd, buffer, sizeof(buffer))) > 0) {
+            fwrite(buffer, 1, bytes_read, stdout);
+        }
+        fflush(stdout);
+    }
+    
+    // Drain stderr pipe
+    if (g_child_stderr_fd != -1) {
+        int flags = fcntl(g_child_stderr_fd, F_GETFL, 0);
+        fcntl(g_child_stderr_fd, F_SETFL, flags | O_NONBLOCK);
+        
+        while ((bytes_read = read(g_child_stderr_fd, buffer, sizeof(buffer))) > 0) {
+            fwrite(buffer, 1, bytes_read, stderr);
+        }
+        fflush(stderr);
+    }
+}
+
+
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
 
@@ -290,8 +326,20 @@ int main(int argc, const char **argv) {
     std::cout << "OOPExecutor: " << OOPExecutor << std::endl;
     std::cout << "UseSharedMemory: " << UseSharedMemory << std::endl;
     std::cout << "SlabAllocateSizeString: " << SlabAllocateSizeString << std::endl;
+    int stdout_pipe[2], stderr_pipe[2];
+    if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) {
+      llvm::errs() << "Failed to create pipes for child process I/O\n";
+      return 0;
+    }
     EPC = ExitOnErr(
-        launchExecutor(OOPExecutor, UseSharedMemory, SlabAllocateSizeString));
+        launchExecutor(OOPExecutor, UseSharedMemory, SlabAllocateSizeString, 0, stdout_pipe[1], stderr_pipe[1]));
+    
+    close(stdout_pipe[1]);
+    close(stderr_pipe[1]);
+
+    g_child_stdout_fd = stdout_pipe[0];
+    g_child_stderr_fd = stderr_pipe[0];
+
   } else if (OOPExecutorConnect.getNumOccurrences()) {
     EPC = ExitOnErr(connectTCPSocket(OOPExecutorConnect, UseSharedMemory,
                                      SlabAllocateSizeString));
@@ -382,6 +430,7 @@ int main(int argc, const char **argv) {
       }
 
       Input = "";
+      drainChildOutput();
       LE.setPrompt("clang-repl> ");
     }
   }

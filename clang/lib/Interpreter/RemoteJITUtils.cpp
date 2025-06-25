@@ -94,7 +94,7 @@ createSharedMemoryManager(SimpleRemoteEPC &SREPC,
 
 Expected<std::unique_ptr<SimpleRemoteEPC>>
 launchExecutor(StringRef ExecutablePath, bool UseSharedMemory,
-               llvm::StringRef SlabAllocateSizeString) {
+               llvm::StringRef SlabAllocateSizeString, int stdin_fd = 0, int stdout_fd = 1, int stderr_fd = 2) {
 #ifndef LLVM_ON_UNIX
   return make_error<StringError>("-" + ExecutablePath +
                                      " not supported on non-unix platforms",
@@ -118,16 +118,11 @@ launchExecutor(StringRef ExecutablePath, bool UseSharedMemory,
   int ToExecutor[2];
   int FromExecutor[2];
 
-  // New pipes for stdout and stderr
-  int StdoutPipe[2];
-  int StderrPipe[2];
-
   pid_t ChildPID;
 
-  // Create pipes
-  if (pipe(ToExecutor) != 0 || pipe(FromExecutor) != 0 ||
-      pipe(StdoutPipe) != 0 || pipe(StderrPipe) != 0)
-    return make_error<StringError>("Unable to create pipes",
+  // Create pipes for RPC communication
+  if (pipe(ToExecutor) != 0 || pipe(FromExecutor) != 0)
+    return make_error<StringError>("Unable to create RPC pipes",
                                    inconvertibleErrorCode());
 
   ChildPID = fork();
@@ -139,17 +134,28 @@ launchExecutor(StringRef ExecutablePath, bool UseSharedMemory,
     close(ToExecutor[WriteEnd]);
     close(FromExecutor[ReadEnd]);
 
-    // Close read ends of stdout and stderr pipes
-    close(StdoutPipe[ReadEnd]);
-    close(StderrPipe[ReadEnd]);
+    // Redirect stdin, stdout, and stderr to provided file descriptors
+    if (stdin_fd != 0) {
+      dup2(stdin_fd, STDIN_FILENO);
+      if (stdin_fd != STDIN_FILENO)
+        close(stdin_fd);
+    }
+    
+    if (stdout_fd != 1) {
+      dup2(stdout_fd, STDOUT_FILENO);
+      if (stdout_fd != STDOUT_FILENO)
+        close(stdout_fd);
 
-    // Redirect stdout and stderr to the pipes
-    dup2(StdoutPipe[WriteEnd], STDOUT_FILENO);
-    dup2(StderrPipe[WriteEnd], STDERR_FILENO);
-
-    // Close write ends after redirection
-    close(StdoutPipe[WriteEnd]);
-    close(StderrPipe[WriteEnd]);
+      setvbuf(stdout, NULL, _IONBF, 0);
+    }
+    
+    if (stderr_fd != 2) {
+      dup2(stderr_fd, STDERR_FILENO);
+      if (stderr_fd != STDERR_FILENO)
+        close(stderr_fd);
+      
+      setvbuf(stderr, NULL, _IONBF, 0);
+    }
 
     // Execute the child process
     std::unique_ptr<char[]> ExecutorPath, FDSpecifier;
@@ -180,10 +186,6 @@ launchExecutor(StringRef ExecutablePath, bool UseSharedMemory,
   close(ToExecutor[ReadEnd]);
   close(FromExecutor[WriteEnd]);
 
-  // Close write ends of stdout and stderr pipes
-  close(StdoutPipe[WriteEnd]);
-  close(StderrPipe[WriteEnd]);
-
   auto S = SimpleRemoteEPC::Setup();
   if (UseSharedMemory)
     S.CreateMemoryManager = [SlabAllocateSizeString](SimpleRemoteEPC &EPC) {
@@ -193,30 +195,6 @@ launchExecutor(StringRef ExecutablePath, bool UseSharedMemory,
   auto EPC = SimpleRemoteEPC::Create<FDSimpleRemoteEPCTransport>(
       std::make_unique<DynamicThreadPoolTaskDispatcher>(std::nullopt),
       std::move(S), FromExecutor[ReadEnd], ToExecutor[WriteEnd]);
-
-  // Read stdout
-  std::thread([readFd = StdoutPipe[ReadEnd]] {
-    char buffer[1024];
-    ssize_t bytesRead;
-    while ((bytesRead = read(readFd, buffer, sizeof(buffer) - 1)) > 0) {
-      buffer[bytesRead] = '\0';
-      fwrite(buffer, 1, bytesRead, stdout);
-      fflush(stdout);
-    }
-    close(readFd);
-  }).detach();
-
-  // Spawn a background thread to read stderr
-  std::thread([readFd = StderrPipe[ReadEnd]] {
-    char buffer[1024];
-    ssize_t bytesRead;
-    while ((bytesRead = read(readFd, buffer, sizeof(buffer) - 1)) > 0) {
-      buffer[bytesRead] = '\0';
-      fwrite(buffer, 1, bytesRead, stderr);
-      fflush(stderr);
-    }
-    close(readFd);
-  }).detach();
 
   return EPC;
 #endif
