@@ -24,6 +24,7 @@
 #include "llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -135,11 +136,13 @@ public:
     std::string OrcRuntimePath = "";
     /// PID of the out-of-process JIT executor.
     uint32_t ExecutorPID = 0;
+    /// Custom lambda to be executed inside child process/executor
+    std::function<void()> CustomizeFork = nullptr;
 
     JITConfig()
         : IsOutOfProcess(false), OOPExecutor(""), OOPExecutorConnect(""),
           UseSharedMemory(false), SlabAllocateSize(0), OrcRuntimePath(""),
-          ExecutorPID(0) {}
+          ExecutorPID(0), CustomizeFork(nullptr) {}
   };
 
 protected:
